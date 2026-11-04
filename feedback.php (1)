@@ -1,0 +1,1708 @@
+<?php
+require_once "../config/database.php";
+require_once "../config/functions.php";
+
+requireAdmin();
+
+/* ==========================================
+   DELETE FEEDBACK
+========================================== */
+
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
+
+    $feedbackId = isset($_POST["feedback_id"])
+        ? (int)$_POST["feedback_id"]
+        : 0;
+
+    if ($feedbackId <= 0) {
+
+        setMessage(
+            "Invalid feedback ID.",
+            "error"
+        );
+
+        redirect("feedback.php");
+    }
+
+    $stmt = $conn->prepare("
+        DELETE FROM feedback
+        WHERE id = ?
+    ");
+
+    $stmt->bind_param(
+        "i",
+        $feedbackId
+    );
+
+    if ($stmt->execute()) {
+
+        setMessage(
+            "Feedback deleted successfully.",
+            "success"
+        );
+
+    } else {
+
+        setMessage(
+            "Feedback could not be deleted.",
+            "error"
+        );
+    }
+
+    redirect("feedback.php");
+}
+
+
+/* ==========================================
+   SEARCH / FILTER
+========================================== */
+
+$search = isset($_GET["search"])
+    ? trim($_GET["search"])
+    : "";
+
+$ratingFilter = isset($_GET["rating"])
+    ? (int)$_GET["rating"]
+    : 0;
+
+
+/* ==========================================
+   FEEDBACK QUERY
+========================================== */
+
+$sql = "
+    SELECT
+        f.id,
+        f.rating,
+        f.comment,
+        f.created_at,
+
+        u.name AS user_name,
+        u.email AS user_email,
+
+        p.name AS product_name,
+        p.image AS product_image
+
+    FROM feedback f
+
+    INNER JOIN users u
+        ON f.user_id = u.id
+
+    INNER JOIN products p
+        ON f.product_id = p.id
+
+    WHERE 1=1
+";
+
+$params = [];
+$types = "";
+
+
+/* Search */
+
+if ($search !== "") {
+
+    $sql .= "
+        AND (
+            u.name LIKE ?
+            OR u.email LIKE ?
+            OR p.name LIKE ?
+            OR f.comment LIKE ?
+        )
+    ";
+
+    $searchLike =
+        "%" . $search . "%";
+
+    $params[] = $searchLike;
+    $params[] = $searchLike;
+    $params[] = $searchLike;
+    $params[] = $searchLike;
+
+    $types .= "ssss";
+}
+
+
+/* Rating */
+
+if ($ratingFilter >= 1 && $ratingFilter <= 5) {
+
+    $sql .= "
+        AND f.rating = ?
+    ";
+
+    $params[] = $ratingFilter;
+
+    $types .= "i";
+}
+
+
+$sql .= "
+    ORDER BY f.created_at DESC
+";
+
+
+$stmt = $conn->prepare($sql);
+
+if (!empty($params)) {
+
+    $stmt->bind_param(
+        $types,
+        ...$params
+    );
+}
+
+$stmt->execute();
+
+$feedbacks =
+    $stmt->get_result();
+
+
+/* ==========================================
+   FEEDBACK SUMMARY
+========================================== */
+
+$totalFeedback = 0;
+$averageRating = 0;
+$fiveStar = 0;
+$fourStar = 0;
+$threeStar = 0;
+$twoStar = 0;
+$oneStar = 0;
+
+$summaryResult = $conn->query("
+    SELECT
+        COUNT(*) AS total_feedback,
+        COALESCE(AVG(rating), 0) AS average_rating,
+
+        SUM(
+            CASE
+                WHEN rating = 5
+                THEN 1 ELSE 0
+            END
+        ) AS five_star,
+
+        SUM(
+            CASE
+                WHEN rating = 4
+                THEN 1 ELSE 0
+            END
+        ) AS four_star,
+
+        SUM(
+            CASE
+                WHEN rating = 3
+                THEN 1 ELSE 0
+            END
+        ) AS three_star,
+
+        SUM(
+            CASE
+                WHEN rating = 2
+                THEN 1 ELSE 0
+            END
+        ) AS two_star,
+
+        SUM(
+            CASE
+                WHEN rating = 1
+                THEN 1 ELSE 0
+            END
+        ) AS one_star
+
+    FROM feedback
+");
+
+if ($summaryResult) {
+
+    $summary =
+        $summaryResult->fetch_assoc();
+
+    $totalFeedback =
+        (int)$summary["total_feedback"];
+
+    $averageRating =
+        (float)$summary["average_rating"];
+
+    $fiveStar =
+        (int)$summary["five_star"];
+
+    $fourStar =
+        (int)$summary["four_star"];
+
+    $threeStar =
+        (int)$summary["three_star"];
+
+    $twoStar =
+        (int)$summary["two_star"];
+
+    $oneStar =
+        (int)$summary["one_star"];
+}
+
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>Feedback Management - Royal Paws</title>
+
+<style>
+
+/* ==========================================
+   GLOBAL
+========================================== */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+
+    font-family:
+        "Segoe UI",
+        Arial,
+        sans-serif;
+
+    background:
+        linear-gradient(
+            135deg,
+            #fffaf0,
+            #f4ead8,
+            #fff
+        );
+
+    color: #302116;
+}
+
+
+/* ==========================================
+   HEADER
+========================================== */
+
+.header {
+
+    background:
+        linear-gradient(
+            135deg,
+            #24150b,
+            #5d381b,
+            #24150b
+        );
+
+    color: white;
+
+    padding: 20px 30px;
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+    box-shadow:
+        0 5px 20px
+        rgba(0,0,0,.25);
+
+    position: sticky;
+
+    top: 0;
+
+    z-index: 100;
+}
+
+.logo {
+
+    font-size: 25px;
+
+    font-weight: 800;
+
+    letter-spacing: 1px;
+}
+
+.logo span {
+    color: #e5b85c;
+}
+
+.header-right {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 15px;
+}
+
+.admin-name {
+
+    color: #f4d590;
+
+    font-size: 14px;
+}
+
+.logout-btn {
+
+    text-decoration: none;
+
+    background: #b8860b;
+
+    color: white;
+
+    padding: 9px 16px;
+
+    border-radius: 8px;
+
+    font-weight: 600;
+
+    transition: .3s;
+}
+
+.logout-btn:hover {
+
+    background: #d39d21;
+
+    transform:
+        translateY(-2px);
+}
+
+
+/* ==========================================
+   LAYOUT
+========================================== */
+
+.layout {
+
+    display: flex;
+
+    min-height:
+        calc(100vh - 75px);
+}
+
+
+/* ==========================================
+   SIDEBAR
+========================================== */
+
+.sidebar {
+
+    width: 240px;
+
+    background:
+        linear-gradient(
+            180deg,
+            #29170d,
+            #402514
+        );
+
+    padding: 25px 15px;
+
+    box-shadow:
+        5px 0 20px
+        rgba(0,0,0,.12);
+}
+
+.sidebar-title {
+
+    color: #e8c476;
+
+    font-size: 12px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 2px;
+
+    margin:
+        10px 15px 15px;
+}
+
+.sidebar a {
+
+    display: block;
+
+    text-decoration: none;
+
+    color: #f6ead7;
+
+    padding: 13px 15px;
+
+    margin-bottom: 6px;
+
+    border-radius: 10px;
+
+    transition: .3s;
+}
+
+.sidebar a:hover,
+.sidebar a.active {
+
+    background:
+        linear-gradient(
+            135deg,
+            #b8860b,
+            #d5a42d
+        );
+
+    color: white;
+
+    transform:
+        translateX(4px);
+}
+
+
+/* ==========================================
+   CONTENT
+========================================== */
+
+.content {
+
+    flex: 1;
+
+    padding: 35px;
+
+    overflow-x: hidden;
+}
+
+.page-title {
+
+    font-size: 32px;
+
+    font-weight: 800;
+
+    color: #3a2413;
+
+    margin-bottom: 8px;
+}
+
+.page-subtitle {
+
+    color: #796750;
+
+    margin-bottom: 28px;
+}
+
+
+/* ==========================================
+   FLASH
+========================================== */
+
+.flash-message {
+
+    padding: 14px 18px;
+
+    border-radius: 10px;
+
+    margin-bottom: 22px;
+
+    font-weight: 600;
+
+    animation:
+        slideDown .5s ease;
+}
+
+.flash-message.success {
+
+    background: #e8f7ed;
+
+    color: #1d6b35;
+
+    border:
+        1px solid #b9e4c4;
+}
+
+.flash-message.error {
+
+    background: #fff0f0;
+
+    color: #a12626;
+
+    border:
+        1px solid #efb5b5;
+}
+
+@keyframes slideDown {
+
+    from {
+        opacity: 0;
+        transform:
+            translateY(-15px);
+    }
+
+    to {
+        opacity: 1;
+        transform:
+            translateY(0);
+    }
+}
+
+
+/* ==========================================
+   SUMMARY
+========================================== */
+
+.summary-grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(4, 1fr);
+
+    gap: 18px;
+
+    margin-bottom: 28px;
+}
+
+.summary-card {
+
+    background:
+        rgba(255,255,255,.92);
+
+    border:
+        1px solid #eadcc4;
+
+    border-radius: 18px;
+
+    padding: 20px;
+
+    box-shadow:
+        0 8px 25px
+        rgba(70,45,20,.10);
+
+    transition: .3s;
+}
+
+.summary-card:hover {
+
+    transform:
+        translateY(-5px);
+
+    box-shadow:
+        0 14px 30px
+        rgba(70,45,20,.16);
+}
+
+.summary-icon {
+
+    font-size: 27px;
+
+    margin-bottom: 9px;
+}
+
+.summary-label {
+
+    color: #806d57;
+
+    font-size: 13px;
+}
+
+.summary-value {
+
+    color: #4b2e17;
+
+    font-size: 27px;
+
+    font-weight: 800;
+
+    margin-top: 5px;
+}
+
+
+/* ==========================================
+   FILTER
+========================================== */
+
+.filter-box {
+
+    background:
+        rgba(255,255,255,.95);
+
+    border:
+        1px solid #eadcc4;
+
+    border-radius: 16px;
+
+    padding: 20px;
+
+    margin-bottom: 25px;
+
+    box-shadow:
+        0 8px 25px
+        rgba(70,45,20,.08);
+}
+
+.filter-form {
+
+    display: grid;
+
+    grid-template-columns:
+        1fr 180px auto auto;
+
+    gap: 12px;
+}
+
+.input,
+.select {
+
+    width: 100%;
+
+    padding: 12px 14px;
+
+    border:
+        1px solid #d8c7aa;
+
+    border-radius: 9px;
+
+    font-size: 14px;
+
+    outline: none;
+
+    background: white;
+}
+
+.input:focus,
+.select:focus {
+
+    border-color: #b8860b;
+
+    box-shadow:
+        0 0 0 3px
+        rgba(184,134,11,.12);
+}
+
+.filter-btn {
+
+    border: none;
+
+    background:
+        linear-gradient(
+            135deg,
+            #8d6507,
+            #c99a25
+        );
+
+    color: white;
+
+    padding:
+        0 20px;
+
+    border-radius: 9px;
+
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition: .3s;
+}
+
+.filter-btn:hover {
+
+    transform:
+        translateY(-2px);
+}
+
+.clear-btn {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    text-decoration: none;
+
+    background: #eee4d4;
+
+    color: #50351f;
+
+    padding:
+        0 18px;
+
+    border-radius: 9px;
+
+    font-weight: 600;
+}
+
+
+/* ==========================================
+   FEEDBACK GRID
+========================================== */
+
+.feedback-grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(2, 1fr);
+
+    gap: 22px;
+}
+
+
+/* ==========================================
+   FEEDBACK CARD
+========================================== */
+
+.feedback-card {
+
+    background:
+        rgba(255,255,255,.96);
+
+    border:
+        1px solid #eadcc4;
+
+    border-radius: 18px;
+
+    padding: 22px;
+
+    box-shadow:
+        0 8px 28px
+        rgba(70,45,20,.10);
+
+    transition: .3s;
+
+    position: relative;
+}
+
+.feedback-card:hover {
+
+    transform:
+        translateY(-4px);
+
+    box-shadow:
+        0 14px 35px
+        rgba(70,45,20,.15);
+}
+
+
+/* ==========================================
+   USER
+========================================== */
+
+.user-section {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    margin-bottom: 17px;
+}
+
+.user-avatar {
+
+    width: 48px;
+
+    height: 48px;
+
+    border-radius: 50%;
+
+    background:
+        linear-gradient(
+            135deg,
+            #b8860b,
+            #e0b552
+        );
+
+    color: white;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    font-size: 21px;
+
+    font-weight: 800;
+}
+
+.user-name {
+
+    font-weight: 800;
+
+    color: #432915;
+}
+
+.user-email {
+
+    font-size: 12px;
+
+    color: #8a765d;
+
+    margin-top: 3px;
+}
+
+
+/* ==========================================
+   PRODUCT
+========================================== */
+
+.product-section {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    background: #fffaf2;
+
+    border:
+        1px solid #eee0c9;
+
+    border-radius: 12px;
+
+    padding: 11px;
+
+    margin-bottom: 17px;
+}
+
+.product-image {
+
+    width: 52px;
+
+    height: 52px;
+
+    object-fit: cover;
+
+    border-radius: 9px;
+
+    border:
+        2px solid #ead5ad;
+}
+
+.product-name {
+
+    color: #5a3a20;
+
+    font-weight: 700;
+}
+
+
+/* ==========================================
+   RATING
+========================================== */
+
+.rating-section {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    margin-bottom: 13px;
+}
+
+.stars {
+
+    font-size: 21px;
+
+    letter-spacing: 2px;
+}
+
+.star-empty {
+
+    opacity: .22;
+}
+
+.rating-number {
+
+    font-weight: 800;
+
+    color: #94670b;
+}
+
+
+/* ==========================================
+   COMMENT
+========================================== */
+
+.comment-box {
+
+    background: #fffdf9;
+
+    border-left:
+        4px solid #c4952c;
+
+    padding: 13px 15px;
+
+    border-radius: 8px;
+
+    color: #5d4935;
+
+    line-height: 1.6;
+
+    font-size: 14px;
+
+    min-height: 55px;
+}
+
+.no-comment {
+
+    color: #9a8a77;
+
+    font-style: italic;
+}
+
+
+/* ==========================================
+   DATE + DELETE
+========================================== */
+
+.feedback-footer {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+    margin-top: 17px;
+
+    padding-top: 14px;
+
+    border-top:
+        1px solid #eee3d2;
+}
+
+.feedback-date {
+
+    font-size: 12px;
+
+    color: #8a765d;
+}
+
+.delete-btn {
+
+    border: none;
+
+    background: #fff0f0;
+
+    color: #a12929;
+
+    padding:
+        8px 12px;
+
+    border-radius: 7px;
+
+    cursor: pointer;
+
+    font-weight: 700;
+
+    transition: .3s;
+}
+
+.delete-btn:hover {
+
+    background: #ffe0e0;
+
+    transform:
+        translateY(-2px);
+}
+
+
+/* ==========================================
+   EMPTY
+========================================== */
+
+.empty {
+
+    grid-column: 1 / -1;
+
+    background:
+        rgba(255,255,255,.95);
+
+    border:
+        1px solid #eadcc4;
+
+    border-radius: 18px;
+
+    text-align: center;
+
+    padding: 60px 20px;
+
+    color: #806d57;
+
+    font-size: 16px;
+}
+
+
+/* ==========================================
+   RESPONSIVE
+========================================== */
+
+@media(max-width: 1050px) {
+
+    .summary-grid {
+
+        grid-template-columns:
+            repeat(2, 1fr);
+    }
+
+    .filter-form {
+
+        grid-template-columns:
+            1fr 1fr;
+    }
+
+    .filter-btn,
+    .clear-btn {
+
+        min-height: 44px;
+    }
+}
+
+@media(max-width: 800px) {
+
+    .feedback-grid {
+
+        grid-template-columns: 1fr;
+    }
+}
+
+@media(max-width: 700px) {
+
+    .layout {
+
+        flex-direction: column;
+    }
+
+    .sidebar {
+
+        width: 100%;
+
+        padding: 12px;
+
+        display: flex;
+
+        gap: 5px;
+
+        overflow-x: auto;
+    }
+
+    .sidebar-title {
+
+        display: none;
+    }
+
+    .sidebar a {
+
+        white-space: nowrap;
+
+        margin: 0;
+    }
+
+    .content {
+
+        padding: 20px 14px;
+    }
+
+    .filter-form {
+
+        grid-template-columns: 1fr;
+    }
+
+    .header {
+
+        padding: 15px;
+    }
+
+    .admin-name {
+
+        display: none;
+    }
+}
+
+@media(max-width: 450px) {
+
+    .summary-grid {
+
+        grid-template-columns: 1fr;
+    }
+
+    .page-title {
+
+        font-size: 25px;
+    }
+
+    .feedback-card {
+
+        padding: 17px;
+    }
+}
+
+</style>
+
+</head>
+
+<body>
+
+
+<!-- ==========================================
+     HEADER
+========================================== -->
+
+<header class="header">
+
+    <div class="logo">
+        🐾 Royal <span>Paws</span>
+    </div>
+
+    <div class="header-right">
+
+        <div class="admin-name">
+            👑 Admin Panel
+        </div>
+
+        <a
+            href="logout.php"
+            class="logout-btn"
+            onclick="return confirm('Logout from admin panel?');"
+        >
+            Logout
+        </a>
+
+    </div>
+
+</header>
+
+
+<div class="layout">
+
+
+<!-- ==========================================
+     SIDEBAR
+========================================== -->
+
+<aside class="sidebar">
+
+    <div class="sidebar-title">
+        Administration
+    </div>
+
+    <a href="dashboard.php">
+        📊 Dashboard
+    </a>
+
+    <a href="products.php">
+        🛍️ Products
+    </a>
+
+    <a href="add_product.php">
+        ➕ Add Product
+    </a>
+
+    <a href="stock.php">
+        📦 Stock
+    </a>
+
+    <a href="orders.php">
+        🧾 Orders
+    </a>
+
+    <a
+        href="feedback.php"
+        class="active"
+    >
+        ⭐ Feedback
+    </a>
+
+</aside>
+
+
+<!-- ==========================================
+     CONTENT
+========================================== -->
+
+<main class="content">
+
+    <h1 class="page-title">
+        ⭐ Customer Feedback
+    </h1>
+
+    <p class="page-subtitle">
+        View ratings and comments submitted by customers.
+    </p>
+
+
+    <?php showMessage(); ?>
+
+
+    <!-- ==========================================
+         SUMMARY
+    ========================================== -->
+
+    <div class="summary-grid">
+
+
+        <div class="summary-card">
+
+            <div class="summary-icon">
+                ⭐
+            </div>
+
+            <div class="summary-label">
+                Total Feedback
+            </div>
+
+            <div class="summary-value">
+                <?php
+                echo $totalFeedback;
+                ?>
+            </div>
+
+        </div>
+
+
+        <div class="summary-card">
+
+            <div class="summary-icon">
+                🌟
+            </div>
+
+            <div class="summary-label">
+                Average Rating
+            </div>
+
+            <div class="summary-value">
+                <?php
+                echo number_format(
+                    $averageRating,
+                    1
+                );
+                ?> / 5
+            </div>
+
+        </div>
+
+
+        <div class="summary-card">
+
+            <div class="summary-icon">
+                ⭐⭐⭐⭐⭐
+            </div>
+
+            <div class="summary-label">
+                5 Star Reviews
+            </div>
+
+            <div class="summary-value">
+                <?php
+                echo $fiveStar;
+                ?>
+            </div>
+
+        </div>
+
+
+        <div class="summary-card">
+
+            <div class="summary-icon">
+                ⭐⭐⭐⭐
+            </div>
+
+            <div class="summary-label">
+                4 Star Reviews
+            </div>
+
+            <div class="summary-value">
+                <?php
+                echo $fourStar;
+                ?>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- ==========================================
+         FILTER
+    ========================================== -->
+
+    <div class="filter-box">
+
+        <form
+            method="GET"
+            class="filter-form"
+        >
+
+            <input
+                type="text"
+                name="search"
+                class="input"
+                placeholder="Search user, email, product or comment..."
+                value="<?php
+                echo e($search);
+                ?>"
+            >
+
+
+            <select
+                name="rating"
+                class="select"
+            >
+
+                <option value="0">
+                    All Ratings
+                </option>
+
+                <?php for ($i = 5; $i >= 1; $i--): ?>
+
+                    <option
+                        value="<?php echo $i; ?>"
+                        <?php
+                        echo $ratingFilter === $i
+                            ? "selected"
+                            : "";
+                        ?>
+                    >
+                        <?php
+                        echo $i;
+                        ?> Star
+                    </option>
+
+                <?php endfor; ?>
+
+            </select>
+
+
+            <button
+                type="submit"
+                class="filter-btn"
+            >
+                🔍 Filter
+            </button>
+
+
+            <a
+                href="feedback.php"
+                class="clear-btn"
+            >
+                Clear
+            </a>
+
+        </form>
+
+    </div>
+
+
+    <!-- ==========================================
+         FEEDBACK CARDS
+    ========================================== -->
+
+    <div class="feedback-grid">
+
+
+    <?php if ($feedbacks->num_rows > 0): ?>
+
+
+        <?php while ($feedback = $feedbacks->fetch_assoc()): ?>
+
+
+            <div class="feedback-card">
+
+
+                <!-- USER -->
+
+                <div class="user-section">
+
+                    <div class="user-avatar">
+
+                        <?php
+                        echo strtoupper(
+                            substr(
+                                $feedback["user_name"],
+                                0,
+                                1
+                            )
+                        );
+                        ?>
+
+                    </div>
+
+
+                    <div>
+
+                        <div class="user-name">
+
+                            <?php
+                            echo e(
+                                $feedback["user_name"]
+                            );
+                            ?>
+
+                        </div>
+
+                        <div class="user-email">
+
+                            <?php
+                            echo e(
+                                $feedback["user_email"]
+                            );
+                            ?>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- PRODUCT -->
+
+                <div class="product-section">
+
+                    <?php
+
+                    $productImage =
+                        !empty(
+                            $feedback["product_image"]
+                        )
+                        ? "../assets/images/" .
+                          $feedback["product_image"]
+                        : "../assets/images/logo.png";
+
+                    ?>
+
+                    <img
+                        src="<?php
+                        echo e($productImage);
+                        ?>"
+                        class="product-image"
+                        alt="<?php
+                        echo e(
+                            $feedback["product_name"]
+                        );
+                        ?>"
+                        onerror="this.src='../assets/images/logo.png';"
+                    >
+
+
+                    <div>
+
+                        <div class="product-name">
+
+                            <?php
+                            echo e(
+                                $feedback["product_name"]
+                            );
+                            ?>
+
+                        </div>
+
+                        <div
+                            style="
+                                font-size:11px;
+                                color:#8a765d;
+                                margin-top:3px;
+                            "
+                        >
+                            Product Review
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- RATING -->
+
+                <div class="rating-section">
+
+                    <div class="stars">
+
+                        <?php for ($i = 1; $i <= 5; $i++): ?>
+
+                            <?php if (
+                                $i <=
+                                (int)$feedback["rating"]
+                            ): ?>
+
+                                ⭐
+
+                            <?php else: ?>
+
+                                <span class="star-empty">
+                                    ⭐
+                                </span>
+
+                            <?php endif; ?>
+
+                        <?php endfor; ?>
+
+                    </div>
+
+
+                    <div class="rating-number">
+
+                        <?php
+                        echo (int)
+                            $feedback["rating"];
+                        ?>
+                        / 5
+
+                    </div>
+
+                </div>
+
+
+                <!-- COMMENT -->
+
+                <div class="comment-box">
+
+                    <?php if (
+                        !empty(
+                            trim(
+                                $feedback["comment"]
+                            )
+                        )
+                    ): ?>
+
+                        <?php
+                        echo nl2br(
+                            e(
+                                $feedback["comment"]
+                            )
+                        );
+                        ?>
+
+                    <?php else: ?>
+
+                        <span class="no-comment">
+                            No written comment.
+                        </span>
+
+                    <?php endif; ?>
+
+                </div>
+
+
+                <!-- FOOTER -->
+
+                <div class="feedback-footer">
+
+                    <div class="feedback-date">
+
+                        📅
+
+                        <?php
+                        echo date(
+                            "d M Y, h:i A",
+                            strtotime(
+                                $feedback["created_at"]
+                            )
+                        );
+                        ?>
+
+                    </div>
+
+
+                    <form
+                        method="POST"
+                        onsubmit="return confirmDelete();"
+                    >
+
+                        <input
+                            type="hidden"
+                            name="feedback_id"
+                            value="<?php
+                            echo (int)
+                                $feedback["id"];
+                            ?>"
+                        >
+
+                        <button
+                            type="submit"
+                            class="delete-btn"
+                        >
+                            🗑️ Delete
+                        </button>
+
+                    </form>
+
+                </div>
+
+            </div>
+
+
+        <?php endwhile; ?>
+
+
+    <?php else: ?>
+
+
+        <div class="empty">
+
+            ⭐
+
+            <br><br>
+
+            No feedback found.
+
+        </div>
+
+
+    <?php endif; ?>
+
+
+    </div>
+
+</main>
+
+</div>
+
+
+<script>
+
+/* ==========================================
+   DELETE CONFIRMATION
+========================================== */
+
+function confirmDelete() {
+
+    return confirm(
+        "Are you sure you want to delete this feedback?"
+    );
+}
+
+
+/* ==========================================
+   AUTO HIDE MESSAGE
+========================================== */
+
+setTimeout(function() {
+
+    const message =
+        document.querySelector(
+            ".flash-message"
+        );
+
+    if (message) {
+
+        message.style.transition =
+            "opacity .5s, transform .5s";
+
+        message.style.opacity = "0";
+
+        message.style.transform =
+            "translateY(-10px)";
+    }
+
+}, 3500);
+
+</script>
+
+</body>
+
+</html>
